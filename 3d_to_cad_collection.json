@@ -1,0 +1,46 @@
+{
+	"info": {
+		"_postman_id": "b5a7b8c9-1d2e-4f3a-9b8c-7d6e5f4a3b2c",
+		"name": "3D to CAD Converter",
+		"description": "A collection of API endpoints for the 3D to CAD Converter service. This service uses FreeCAD to intelligently convert mesh files (STL, OBJ) into solid CAD files (STEP).",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Convert Mesh to CAD",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "file",
+							"type": "file",
+							"description": "The 3D mesh file to be converted. Supported formats are .stl and .obj. The file will be processed, repaired, and converted to a .step file."
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}/convert",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"convert"
+					]
+				},
+				"description": "Uploads a 3D mesh file and converts it to a STEP file.\n\n**Parameters:**\n- `file` (Required): The 3D model file to upload. Must be a valid `.stl` or `.obj` file.\n\n**Process:**\n1.  **Upload**: The file is received by the server.\n2.  **Repair**: The system attempts to repair the mesh (fix normals, fill holes, remove non-manifolds).\n3.  **Conversion**: The mesh is converted to a shape and then a solid.\n4.  **Optimization**: Redundant edges are removed.\n5.  **Response**: The converted `.step` file is returned as a download."
+			},
+			"response": []
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://127.0.0.1:8000",
+			"type": "string",
+			"description": "The base URL of the API server."
+		}
+	]
+}

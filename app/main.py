@@ -8,6 +8,10 @@ from typing import Optional
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 app = FastAPI(title="3D to CAD Converter")
 
 # Configuration for FreeCAD path
@@ -15,9 +19,17 @@ FREECAD_CMD = os.getenv("FREECAD_CMD")
 
 def find_freecad():
     global FREECAD_CMD
-    if FREECAD_CMD and os.path.exists(FREECAD_CMD):
-        return FREECAD_CMD
-    
+    if FREECAD_CMD:
+        # Always convert to absolute path to avoid issues with subprocess and shell=True
+        abs_path = os.path.abspath(FREECAD_CMD)
+        if os.path.exists(abs_path):
+            FREECAD_CMD = abs_path
+            return abs_path
+            
+        # Fallback: check if the relative path exists (though abspath should cover this)
+        if os.path.exists(FREECAD_CMD):
+            return os.path.abspath(FREECAD_CMD)
+            
     # Common paths to check
     possible_paths = [
         r"C:\Program Files\FreeCAD 0.21\bin\FreeCADCmd.exe",
@@ -67,27 +79,61 @@ async def convert_file(background_tasks: BackgroundTasks, file: UploadFile = Fil
     if not cmd:
         raise HTTPException(status_code=500, detail="FreeCAD executable not found on server. Please install FreeCAD or set FREECAD_CMD.")
 
+    # Warn if using GUI executable
+    if "FreeCAD.exe" in os.path.basename(cmd) and "FreeCADCmd.exe" not in os.path.basename(cmd):
+        print("WARNING: You are using 'FreeCAD.exe' (GUI) instead of 'FreeCADCmd.exe' (Console). This may cause issues or require elevation. Please use 'FreeCADCmd.exe' if possible.")
+
     # Create a temporary directory for processing
     with tempfile.TemporaryDirectory() as temp_dir:
         input_path = os.path.join(temp_dir, file.filename)
+        # Ensure input path uses forward slashes for Python string compatibility in generated script
+        input_path = input_path.replace("\\", "/")
+        
         output_filename = os.path.splitext(file.filename)[0] + ".step"
         output_path = os.path.join(temp_dir, output_filename)
+        output_path = output_path.replace("\\", "/")
         
         # Save uploaded file
         with open(input_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        # Path to converter script
-        script_path = os.path.join(os.path.dirname(__file__), "converter_script.py")
+        # Create a temporary python script that has the paths hardcoded
+        # This avoids passing arguments to FreeCADCmd which can be misinterpreted as files to open
+        converter_logic_path = os.path.join(os.path.dirname(__file__), "converter_script.py").replace("\\", "/")
         
-        # Run FreeCAD conversion
-        print(f"Running conversion: {cmd} {script_path} {input_path} {output_path}")
+        wrapper_script_content = f"""
+import sys
+import os
+
+# Add the app directory to path so we can import the converter logic
+sys.path.append("{os.path.dirname(converter_logic_path)}")
+
+import converter_script
+
+try:
+    converter_script.convert("{input_path}", "{output_path}")
+except Exception as e:
+    print(f"Wrapper Error: {{e}}")
+    sys.exit(1)
+"""
+        wrapper_script_path = os.path.join(temp_dir, "run_conversion.py")
+        with open(wrapper_script_path, "w") as f:
+            f.write(wrapper_script_content)
+        
+        # Run FreeCAD conversion using the wrapper script
+        # Command: FreeCADCmd.exe run_conversion.py
+        command_str = f'"{cmd}" "{wrapper_script_path}"'
+        print(f"Running conversion: {command_str}")
+        
         try:
             process = subprocess.run(
-                [cmd, script_path, input_path, output_path],
+                command_str,
                 capture_output=True,
                 text=True,
-                check=False
+                check=False,
+                shell=True,
+                encoding='utf-8', 
+                errors='replace' # Handle potential encoding errors in FreeCAD output
             )
             
             # Log output for debugging
@@ -100,6 +146,7 @@ async def convert_file(background_tasks: BackgroundTasks, file: UploadFile = Fil
                 raise HTTPException(status_code=500, detail=f"Conversion process failed. Logs: {process.stderr}")
                 
             if not os.path.exists(output_path):
+                # Check if maybe it failed silently or output was redirected
                 raise HTTPException(status_code=500, detail="Conversion failed: Output file was not created. The mesh might be too complex or invalid.")
                 
             # Copy to a persistent temp location to return it
